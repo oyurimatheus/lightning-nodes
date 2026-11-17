@@ -1,0 +1,32 @@
+[
+  {
+    "publicKey": "03864ef025fdec8e8b1c78b0ff07b8f2e5b8b9c9a9e0c8b8f2e5b8b9c9a9e0c8b8",
+    "alias": "ACINQ",
+    "channels": 2908,
+    "capacity": 36010516297,
+    "firstSeen": 1522941222,
+    "updatedAt": 1661274935,
+    "city": null,
+    "country": { "en": "United States" }
+  },
+  {
+    "publicKey": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "alias": "Node B",
+    "channels": 1200,
+    "capacity": 550000,
+    "firstSeen": 1522941222,
+    "updatedAt": 1661274935,
+    "city": "Amsterdam",
+    "country": { "en": "Netherlands" }
+  },
+  {
+    "publicKey": "02bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "alias": "",
+    "channels": 3,
+    "capacity": 1,
+    "firstSeen": 0,
+    "updatedAt": null,
+    "city": null,
+    "country": null
+  }
+]
