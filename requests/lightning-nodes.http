@@ -1,0 +1,20 @@
+### Lightning Nodes — HTTP request collection
+### Works with VS Code REST Client, JetBrains HTTP Client and curl-compatible
+### tooling. Adjust the base URL variable if the app runs elsewhere.
+
+@base_url = http://localhost:3000
+
+### List nodes (extended mode: includes saved_at; default when
+### API_INCLUDE_SAVED_AT=true). Empty database still returns 200 [].
+GET {{base_url}}/nodes
+
+### Liveness — always 200 while the process runs
+GET {{base_url}}/health/live
+
+### Readiness — 200 when the database is reachable; a failed synchronization
+### does NOT fail readiness while the last valid snapshot remains servable.
+GET {{base_url}}/health/ready
+
+### Synchronization status — state, last success/failure, last payload size
+### and the currently active snapshot identifier.
+GET {{base_url}}/sync/status
