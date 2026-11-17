@@ -121,6 +121,8 @@ curl -s http://localhost:3000/nodes | jq .
 ## Configuration
 
 Precedence: **environment variables > `config/default.toml` > built-in defaults**.
+Duration values use [humantime](https://docs.rs/humantime) syntax (`"5s"`,
+`"600s"`, `"10m"`, `"1h 30s"`) in both TOML and environment variables.
 
 | Key (TOML) | Env var | Default | Meaning |
 |---|---|---|---|
@@ -129,10 +131,10 @@ Precedence: **environment variables > `config/default.toml` > built-in defaults*
 | `server.port` | `SERVER_PORT` | `3000` | Bind port |
 | `database.read_pool_max_connections` | — | `10` | Read pool size |
 | `database.write_pool_max_connections` | — | `2` | Write pool size |
-| `database.acquire_timeout_seconds` | — | `5` | Pool acquire timeout |
+| `database.acquire_timeout` | `DB_ACQUIRE_TIMEOUT` | `5s` | Pool acquire timeout |
 | `mempool.base_url` | `MEMPOOL_BASE_URL` | `https://mempool.space` | Provider base URL |
-| `mempool.timeout_seconds` | `MEMPOOL_TIMEOUT_SECONDS` | `10` | Request + connect timeout |
-| `synchronization.interval_seconds` | `SYNC_INTERVAL_SECONDS` | `600` | Sync period |
+| `mempool.timeout` | `MEMPOOL_TIMEOUT` | `10s` | Request + connect timeout |
+| `synchronization.interval` | `SYNC_INTERVAL` | `600s` | Sync period |
 | `synchronization.batch_size` | `SYNC_BATCH_SIZE` | `500` | Insert batch size (≤ 13107) |
 | `synchronization.sync_on_startup` | `SYNC_ON_STARTUP` | `true` | Import once at startup |
 | `synchronization.reject_empty_response` | `REJECT_EMPTY_RESPONSE` | `true` | Treat empty payload as failure |
