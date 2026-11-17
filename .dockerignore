@@ -7,5 +7,6 @@ prompt/
 tests/
 docker/
 compose.yaml
+compose.yaml
 Dockerfile
 README.md

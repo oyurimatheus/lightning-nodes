@@ -87,17 +87,36 @@ All commands: `mise exec -- just --list`.
 ## Running with Docker
 
 ```bash
-docker compose up --build -d    # PostgreSQL + application
+docker compose -f docker/compose.yaml up --build -d    # PostgreSQL + application
 curl http://localhost:3000/nodes
 ```
 
-Logs: `docker compose logs -f app`. Stop without deleting data: `docker compose down`.
+Logs: `docker compose -f docker/compose.yaml logs -f app`. Stop without deleting data: `docker compose -f docker/compose.yaml down`.
 Reset the database (destructive): `just db-reset`.
 
 **Migrations** run during application startup before the server binds. This is
 safe because sqlx records applied migrations in `_sqlx_migrations` and takes a
 PostgreSQL advisory lock, so concurrent starters cannot race; the app also
 waits for the `postgres` health check before starting.
+
+### Verifying with curl
+
+```bash
+# List nodes (extended mode: includes saved_at)
+curl -i http://localhost:3000/nodes
+
+# Liveness — always 200 while the process runs
+curl -i http://localhost:3000/health/live
+
+# Readiness — 200 when the database is reachable
+curl -i http://localhost:3000/health/ready
+
+# Synchronization status — last success/failure and active snapshot id
+curl -i http://localhost:3000/sync/status
+
+# Pretty-print the nodes payload
+curl -s http://localhost:3000/nodes | jq .
+```
 
 ## Configuration
 

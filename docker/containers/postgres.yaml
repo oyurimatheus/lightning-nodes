@@ -1,0 +1,21 @@
+# Reusable PostgreSQL service fragment, included by ../compose.yaml.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: lightning
+      POSTGRES_PASSWORD: lightning
+      POSTGRES_DB: lightning
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lightning -d lightning"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
