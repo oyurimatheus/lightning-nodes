@@ -84,14 +84,23 @@ mise exec -- just dev          # runs the application on :3000
 
 All commands: `mise exec -- just --list`.
 
-## Running with Docker
+## Running with Podman
+
+Podman (or a Docker-compatible runtime) is required for the container stack.
+`podman compose` wraps a compose provider (`podman-compose` or
+`docker-compose`); configure it once if needed:
 
 ```bash
-docker compose -f docker/compose.yaml up --build -d    # PostgreSQL + application
+# one-time, if podman has no compose provider configured yet
+podman config set runtime.compose_provider podman-compose
+```
+
+```bash
+podman compose -f docker/compose.yaml up --build -d    # PostgreSQL + application
 curl http://localhost:3000/nodes
 ```
 
-Logs: `docker compose -f docker/compose.yaml logs -f app`. Stop without deleting data: `docker compose -f docker/compose.yaml down`.
+Logs: `podman compose -f docker/compose.yaml logs -f app`. Stop without deleting data: `podman compose -f docker/compose.yaml down`.
 Reset the database (destructive): `just db-reset`.
 
 **Migrations** run during application startup before the server binds. This is
@@ -260,8 +269,8 @@ script in your environment.
 ## Testing
 
 ```bash
-just test               # unit tests (no network, no Docker)
-just test-integration   # integration tests (requires Docker for Testcontainers)
+just test               # unit tests (no network, no Podman)
+just test-integration   # integration tests (requires Podman or a Docker-compatible runtime)
 just test-all
 just ci                 # fmt-check + clippy -D warnings + check + unit + release
 ```
