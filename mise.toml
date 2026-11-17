@@ -1,0 +1,7 @@
+[tools]
+rust = "1.94.0"
+just = "1.42.5"
+sqlx-cli = "0.8.6"
+
+[env]
+_.file = ".env"

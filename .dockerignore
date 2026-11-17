@@ -1,0 +1,11 @@
+target/
+.git/
+docs/
+prompt/
+.env
+*.log
+tests/
+docker/
+compose.yaml
+Dockerfile
+README.md
