@@ -1,0 +1,31 @@
+use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::time::Duration;
+
+use crate::app::config::AppConfig;
+use crate::shared::error::AppError;
+
+/// Independently configurable read and write connection pools. Both may point
+/// at the same PostgreSQL primary; separate pools let tuning favor the hot
+/// read path without starving the bulk write path.
+pub struct DatabasePools {
+    pub read: PgPool,
+    pub write: PgPool,
+}
+
+pub async fn build(config: &AppConfig, url: &str) -> Result<DatabasePools, AppError> {
+    let db = &config.database;
+    let acquire = Duration::from_secs(db.acquire_timeout_seconds);
+    Ok(DatabasePools {
+        read: pool(url, db.read_pool_max_connections, acquire).await?,
+        write: pool(url, db.write_pool_max_connections, acquire).await?,
+    })
+}
+
+async fn pool(url: &str, max: u32, acquire: Duration) -> Result<PgPool, AppError> {
+    PgPoolOptions::new()
+        .max_connections(max)
+        .acquire_timeout(acquire)
+        .connect(url)
+        .await
+        .map_err(|e| AppError::DatabaseUnavailable(format!("failed to connect: {e}")))
+}
