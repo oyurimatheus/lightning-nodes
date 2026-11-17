@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Router;
 use uuid::Uuid;
@@ -57,7 +56,7 @@ pub async fn build_components(
     let provider_url = config.mempool.base_url.clone();
     let provider: Arc<dyn NodeProvider> = Arc::new(MempoolClient::new(
         provider_url.clone(),
-        Duration::from_secs(config.mempool.timeout_seconds),
+        config.mempool.timeout,
     )?);
     let repository = Arc::new(PostgresSnapshotRepository::new(
         pools.write.clone(),
@@ -104,7 +103,7 @@ pub fn spawn_scheduler(components: &AppComponents) {
     let scheduler = Scheduler::new(
         components.sync_job.clone(),
         components.status.clone(),
-        components.config.synchronization.interval_seconds,
+        components.config.synchronization.interval,
         components.config.synchronization.sync_on_startup,
     );
     Arc::new(scheduler).spawn();

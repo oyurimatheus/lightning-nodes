@@ -14,10 +14,9 @@ pub struct DatabasePools {
 
 pub async fn build(config: &AppConfig, url: &str) -> Result<DatabasePools, AppError> {
     let db = &config.database;
-    let acquire = Duration::from_secs(db.acquire_timeout_seconds);
     Ok(DatabasePools {
-        read: pool(url, db.read_pool_max_connections, acquire).await?,
-        write: pool(url, db.write_pool_max_connections, acquire).await?,
+        read: pool(url, db.read_pool_max_connections, db.acquire_timeout).await?,
+        write: pool(url, db.write_pool_max_connections, db.acquire_timeout).await?,
     })
 }
 

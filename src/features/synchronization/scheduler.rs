@@ -91,7 +91,7 @@ pub async fn run_with_backoff(
 pub struct Scheduler {
     job: Arc<SyncJob>,
     status: Arc<SyncStatusHandle>,
-    interval_seconds: u64,
+    interval: Duration,
     sync_on_startup: bool,
 }
 
@@ -99,13 +99,13 @@ impl Scheduler {
     pub fn new(
         job: Arc<SyncJob>,
         status: Arc<SyncStatusHandle>,
-        interval_seconds: u64,
+        interval: Duration,
         sync_on_startup: bool,
     ) -> Self {
         Self {
             job,
             status,
-            interval_seconds,
+            interval,
             sync_on_startup,
         }
     }
@@ -114,7 +114,7 @@ impl Scheduler {
     /// available before the first import completes.
     pub fn spawn(self: Arc<Self>) {
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(self.interval_seconds));
+            let mut ticker = tokio::time::interval(self.interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut first = true;
             loop {

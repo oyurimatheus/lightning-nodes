@@ -63,7 +63,7 @@ fn test_config(
 ) -> AppConfig {
     let mut config = AppConfig::default();
     config.mempool.base_url = provider_url;
-    config.mempool.timeout_seconds = mempool_timeout_seconds;
+    config.mempool.timeout = std::time::Duration::from_secs(mempool_timeout_seconds);
     config.synchronization.sync_on_startup = false; // tests drive sync explicitly
     config.api.include_saved_at = include_saved_at;
     config

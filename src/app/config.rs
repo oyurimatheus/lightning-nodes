@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::shared::error::AppError;
 
@@ -6,6 +7,8 @@ use crate::shared::error::AppError;
 ///
 /// Precedence: environment variables > `config/default.toml` > built-in
 /// defaults. `DATABASE_URL` is environment-only (never stored in the repo).
+/// Duration values use humantime syntax (`"5s"`, `"10m"`, `"1h 30s"`), both
+/// in TOML and environment variables.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -29,18 +32,18 @@ pub struct DatabaseConfig {
     pub url: Option<String>,
     pub read_pool_max_connections: u32,
     pub write_pool_max_connections: u32,
-    pub acquire_timeout_seconds: u64,
+    pub acquire_timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
 pub struct MempoolConfig {
     pub base_url: String,
-    pub timeout_seconds: u64,
+    pub timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
 pub struct SynchronizationConfig {
-    pub interval_seconds: u64,
+    pub interval: Duration,
     pub batch_size: usize,
     pub sync_on_startup: bool,
     pub reject_empty_response: bool,
@@ -77,14 +80,14 @@ impl Default for AppConfig {
                 url: None,
                 read_pool_max_connections: 10,
                 write_pool_max_connections: 2,
-                acquire_timeout_seconds: 5,
+                acquire_timeout: Duration::from_secs(5),
             },
             mempool: MempoolConfig {
                 base_url: "https://mempool.space".to_owned(),
-                timeout_seconds: 10,
+                timeout: Duration::from_secs(10),
             },
             synchronization: SynchronizationConfig {
-                interval_seconds: 600,
+                interval: Duration::from_secs(600),
                 batch_size: 500,
                 sync_on_startup: true,
                 reject_empty_response: true,
@@ -119,16 +122,19 @@ struct TomlServer {
 struct TomlDatabase {
     read_pool_max_connections: Option<u32>,
     write_pool_max_connections: Option<u32>,
-    acquire_timeout_seconds: Option<u64>,
+    #[serde(with = "humantime_serde")]
+    acquire_timeout: Option<Duration>,
 }
 #[derive(Deserialize, Default)]
 struct TomlMempool {
     base_url: Option<String>,
-    timeout_seconds: Option<u64>,
+    #[serde(with = "humantime_serde")]
+    timeout: Option<Duration>,
 }
 #[derive(Deserialize, Default)]
 struct TomlSynchronization {
-    interval_seconds: Option<u64>,
+    #[serde(with = "humantime_serde")]
+    interval: Option<Duration>,
     batch_size: Option<usize>,
     sync_on_startup: Option<bool>,
     reject_empty_response: Option<bool>,
@@ -179,21 +185,21 @@ impl AppConfig {
                 if let Some(v) = d.write_pool_max_connections {
                     config.database.write_pool_max_connections = v;
                 }
-                if let Some(v) = d.acquire_timeout_seconds {
-                    config.database.acquire_timeout_seconds = v;
+                if let Some(v) = d.acquire_timeout {
+                    config.database.acquire_timeout = v;
                 }
             }
             if let Some(m) = toml.mempool {
                 if let Some(v) = m.base_url {
                     config.mempool.base_url = v;
                 }
-                if let Some(v) = m.timeout_seconds {
-                    config.mempool.timeout_seconds = v;
+                if let Some(v) = m.timeout {
+                    config.mempool.timeout = v;
                 }
             }
             if let Some(s) = toml.synchronization {
-                if let Some(v) = s.interval_seconds {
-                    config.synchronization.interval_seconds = v;
+                if let Some(v) = s.interval {
+                    config.synchronization.interval = v;
                 }
                 if let Some(v) = s.batch_size {
                     config.synchronization.batch_size = v;
@@ -220,7 +226,8 @@ impl AppConfig {
             }
         }
 
-        // Environment overrides win over the TOML file.
+        // Environment overrides win over the TOML file. Durations use
+        // humantime syntax ("600s", "10m").
         if let Some(v) = env("DATABASE_URL") {
             config.database.url = Some(v);
         }
@@ -230,14 +237,17 @@ impl AppConfig {
         if let Some(v) = parse_env(&env, "SERVER_PORT")? {
             config.server.port = v;
         }
-        if let Some(v) = parse_env(&env, "SYNC_INTERVAL_SECONDS")? {
-            config.synchronization.interval_seconds = v;
+        if let Some(v) = parse_duration(&env, "SYNC_INTERVAL")? {
+            config.synchronization.interval = v;
         }
         if let Some(v) = parse_env(&env, "SYNC_BATCH_SIZE")? {
             config.synchronization.batch_size = v;
         }
-        if let Some(v) = parse_env(&env, "MEMPOOL_TIMEOUT_SECONDS")? {
-            config.mempool.timeout_seconds = v;
+        if let Some(v) = parse_duration(&env, "MEMPOOL_TIMEOUT")? {
+            config.mempool.timeout = v;
+        }
+        if let Some(v) = parse_duration(&env, "DB_ACQUIRE_TIMEOUT")? {
+            config.database.acquire_timeout = v;
         }
         if let Some(v) = parse_env(&env, "HISTORY_RETENTION_DAYS")? {
             config.history.retention_days = v;
@@ -265,9 +275,9 @@ impl AppConfig {
     /// Reject invalid values early with actionable messages.
     pub fn validate(&self) -> Result<(), AppError> {
         let s = &self.synchronization;
-        if s.interval_seconds == 0 {
+        if s.interval.is_zero() {
             return Err(AppError::Configuration(
-                "synchronization.interval_seconds must be greater than 0".to_owned(),
+                "synchronization.interval must be greater than 0s".to_owned(),
             ));
         }
         if s.batch_size == 0 {
@@ -286,14 +296,14 @@ impl AppConfig {
                 "database pool sizes must be greater than 0".to_owned(),
             ));
         }
-        if d.acquire_timeout_seconds == 0 {
+        if d.acquire_timeout.is_zero() {
             return Err(AppError::Configuration(
-                "database.acquire_timeout_seconds must be greater than 0".to_owned(),
+                "database.acquire_timeout must be greater than 0s".to_owned(),
             ));
         }
-        if self.mempool.timeout_seconds == 0 {
+        if self.mempool.timeout.is_zero() {
             return Err(AppError::Configuration(
-                "mempool.timeout_seconds must be greater than 0".to_owned(),
+                "mempool.timeout must be greater than 0s".to_owned(),
             ));
         }
         if self.history.minimum_successful_snapshots == 0 {
@@ -321,6 +331,21 @@ fn parse_env<T: std::str::FromStr>(
                 "environment variable {key}={raw:?} is not a valid value"
             ))
         }),
+    }
+}
+
+/// Parse an environment duration using humantime syntax ("5s", "10m").
+fn parse_duration(
+    env: &impl Fn(&str) -> Option<String>,
+    key: &str,
+) -> Result<Option<Duration>, AppError> {
+    match env(key) {
+        None => Ok(None),
+        Some(raw) => humantime::parse_duration(raw.trim())
+            .map(Some)
+            .map_err(|_| AppError::Configuration(format!(
+                "environment variable {key}={raw:?} is not a valid duration (humantime syntax, e.g. \"10s\", \"10m\")"
+            ))),
     }
 }
 
@@ -352,7 +377,7 @@ mod tests {
     #[test]
     fn defaults_match_spec() {
         let config = AppConfig::build(None, |_| None).unwrap();
-        assert_eq!(config.synchronization.interval_seconds, 600);
+        assert_eq!(config.synchronization.interval, Duration::from_secs(600));
         assert_eq!(config.synchronization.batch_size, 500);
         assert!(config.synchronization.sync_on_startup);
         assert!(config.synchronization.reject_empty_response);
@@ -360,6 +385,8 @@ mod tests {
         assert_eq!(config.history.retention_days, 30);
         assert_eq!(config.history.minimum_successful_snapshots, 3);
         assert_eq!(config.server.port, 3000);
+        assert_eq!(config.mempool.timeout, Duration::from_secs(10));
+        assert_eq!(config.database.acquire_timeout, Duration::from_secs(5));
     }
 
     #[test]
@@ -367,14 +394,20 @@ mod tests {
         let toml = r#"
             [server]
             port = 8080
+            [database]
+            acquire_timeout = "3s"
+            [mempool]
+            timeout = "20s"
             [synchronization]
-            interval_seconds = 120
+            interval = "10m"
             batch_size = 250
         "#;
         let config = AppConfig::build(Some(toml), |_| None).unwrap();
         assert_eq!(config.server.port, 8080);
-        assert_eq!(config.synchronization.interval_seconds, 120);
+        assert_eq!(config.synchronization.interval, Duration::from_secs(600));
         assert_eq!(config.synchronization.batch_size, 250);
+        assert_eq!(config.database.acquire_timeout, Duration::from_secs(3));
+        assert_eq!(config.mempool.timeout, Duration::from_secs(20));
         // Untouched keys keep their defaults.
         assert!(config.api.include_saved_at);
         assert_eq!(config.history.retention_days, 30);
@@ -384,16 +417,31 @@ mod tests {
     fn env_overrides_toml() {
         let toml = r#"
             [synchronization]
-            interval_seconds = 120
+            interval = "10m"
         "#;
-        let env = lookup(&[("SYNC_INTERVAL_SECONDS", "42")]);
+        let env = lookup(&[("SYNC_INTERVAL", "45s")]);
         let config = AppConfig::build(Some(toml), env).unwrap();
-        assert_eq!(config.synchronization.interval_seconds, 42);
+        assert_eq!(config.synchronization.interval, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn env_accepts_compound_humantime() {
+        let env = lookup(&[("SYNC_INTERVAL", "1m 30s")]);
+        let config = AppConfig::build(None, env).unwrap();
+        assert_eq!(config.synchronization.interval, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn env_memtimeout_and_acquire() {
+        let env = lookup(&[("MEMPOOL_TIMEOUT", "8s"), ("DB_ACQUIRE_TIMEOUT", "2s")]);
+        let config = AppConfig::build(None, env).unwrap();
+        assert_eq!(config.mempool.timeout, Duration::from_secs(8));
+        assert_eq!(config.database.acquire_timeout, Duration::from_secs(2));
     }
 
     #[test]
     fn invalid_interval_rejected() {
-        let config = AppConfig::build(Some("[synchronization]\ninterval_seconds = 0\n"), |_| None);
+        let config = AppConfig::build(Some("[synchronization]\ninterval = \"0s\"\n"), |_| None);
         assert!(matches!(config, Err(AppError::Configuration(_))));
     }
 
@@ -407,6 +455,20 @@ mod tests {
     fn invalid_pool_sizes_rejected() {
         let toml = "[database]\nread_pool_max_connections = 0\n";
         let config = AppConfig::build(Some(toml), |_| None);
+        assert!(matches!(config, Err(AppError::Configuration(_))));
+    }
+
+    #[test]
+    fn malformed_humantime_toml_rejected() {
+        let toml = "[mempool]\ntimeout = \"soon\"\n";
+        let config = AppConfig::build(Some(toml), |_| None);
+        assert!(matches!(config, Err(AppError::Configuration(_))));
+    }
+
+    #[test]
+    fn malformed_humantime_env_rejected() {
+        let env = lookup(&[("SYNC_INTERVAL", "tomorrow")]);
+        let config = AppConfig::build(None, env);
         assert!(matches!(config, Err(AppError::Configuration(_))));
     }
 
