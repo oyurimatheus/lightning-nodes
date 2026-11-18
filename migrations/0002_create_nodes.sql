@@ -1,5 +1,5 @@
--- Node rows for each snapshot. Snapshots are immutable once published:
--- the write path is append-only, and publication only updates the pointer.
+
+
 
 CREATE TABLE lightning_nodes (
     snapshot_id   UUID NOT NULL,

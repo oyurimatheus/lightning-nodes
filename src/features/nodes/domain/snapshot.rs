@@ -23,22 +23,17 @@ impl SnapshotStatus {
     }
 }
 
-/// Snapshot lifecycle state, mirroring the `node_snapshots` table.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub id: Uuid,
     pub status: SnapshotStatus,
     pub created_at: DateTime<Utc>,
-    /// Publication time, assigned by PostgreSQL inside the publication
-    /// transaction. Shared by every node of the snapshot.
+
     pub saved_at: Option<DateTime<Utc>>,
     pub node_count: i32,
     pub error_message: Option<String>,
 }
 
-/// Validate a fully converted node set before any persistence happens:
-/// duplicate public keys would violate the composite primary key, so they are
-/// rejected up front.
 pub fn validate_unique_public_keys(nodes: &[LightningNode]) -> Result<(), AppError> {
     let mut seen = HashSet::with_capacity(nodes.len());
     for node in nodes {

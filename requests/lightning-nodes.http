@@ -1,20 +1,24 @@
-### Lightning Nodes — HTTP request collection
-### Works with VS Code REST Client, JetBrains HTTP Client and curl-compatible
-### tooling. Adjust the base URL variable if the app runs elsewhere.
+### Lightning Nodes — coleção de requisições HTTP
+### Compatível com VS Code REST Client, JetBrains HTTP Client e ferramentas
+### compatíveis com curl. Ajuste a URL base se a aplicação estiver em outro endereço.
 
 @base_url = http://localhost:3000
 
-### List nodes (extended mode: includes saved_at; default when
-### API_INCLUDE_SAVED_AT=true). Empty database still returns 200 [].
+### Listar nós (modo estendido: inclui saved_at; padrão quando
+### API_INCLUDE_SAVED_AT=true). Banco vazio ainda retorna 200 [].
 GET {{base_url}}/nodes
 
-### Liveness — always 200 while the process runs
+### Segunda página, 25 nós por página. A resposta inclui cabeçalhos X-Total-Count,
+### X-Page, X-Per-Page e X-Total-Pages.
+GET {{base_url}}/nodes?page=2&per_page=25
+
+### Liveness — retorna sempre 200 enquanto o processo estiver em execução
 GET {{base_url}}/health/live
 
-### Readiness — 200 when the database is reachable; a failed synchronization
-### does NOT fail readiness while the last valid snapshot remains servable.
+### Readiness — retorna 200 quando o banco está acessível; uma sincronização
+### com falha NÃO afeta a readiness enquanto o último snapshot válido puder ser servido.
 GET {{base_url}}/health/ready
 
-### Synchronization status — state, last success/failure, last payload size
-### and the currently active snapshot identifier.
+### Estado da sincronização — situação, último sucesso/falha, tamanho do
+### último payload e identificador do snapshot ativo.
 GET {{base_url}}/sync/status

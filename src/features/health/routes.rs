@@ -4,14 +4,10 @@ use sqlx::PgPool;
 
 use crate::app::state::AppState;
 
-/// Liveness: the process is running.
 async fn live() -> StatusCode {
     StatusCode::OK
 }
 
-/// Readiness: application and database (read pool) are reachable. A failed
-/// synchronization does NOT fail readiness while the last valid snapshot
-/// remains servable; staleness is exposed via `/sync/status`.
 async fn ready(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -30,5 +26,4 @@ pub fn routes() -> Router<AppState> {
         .route("/health/ready", get(ready))
 }
 
-/// Helper so tests / other features can reuse the readiness probe type.
 pub type ReadinessPool = PgPool;

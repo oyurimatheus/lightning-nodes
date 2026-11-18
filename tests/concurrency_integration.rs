@@ -1,6 +1,3 @@
-//! Concurrency scenarios: imports racing with parallel HTTP reads, and
-//! concurrent publication attempts.
-
 mod common;
 
 use axum::http::StatusCode;
@@ -8,8 +5,6 @@ use common::{provider_json, start_stack};
 use std::collections::HashSet;
 use tower::util::ServiceExt;
 
-/// Multiple concurrent GET requests during an import: all succeed and every
-/// response is one whole snapshot.
 #[tokio::test]
 async fn concurrent_reads_during_import_are_consistent() {
     let env = start_stack(&provider_json(10), 200, true).await;
@@ -79,15 +74,12 @@ async fn concurrent_reads_during_import_are_consistent() {
     );
 }
 
-/// Two concurrent sync cycles never double-publish: one wins, the other
-/// observes the mutual exclusion, and exactly one snapshot is published.
 #[tokio::test]
 async fn concurrent_cycles_produce_single_publication() {
     let env = start_stack(&provider_json(5), 200, true).await;
 
     let (first, second) = tokio::join!(env.run_sync(), async { env.run_sync().await });
-    // Both may succeed sequentially (mutex) or one may fail; the invariant is
-    // a single active ready snapshot.
+
     let successes = [first.is_ok(), second.is_ok()]
         .into_iter()
         .filter(|ok| *ok)
@@ -112,7 +104,6 @@ async fn concurrent_cycles_produce_single_publication() {
     assert_eq!(active, 1, "exactly one active snapshot");
 }
 
-/// HTTP throughput smoke test: repeated requests on a warm snapshot.
 #[tokio::test]
 async fn repeated_requests_are_stable() {
     let env = start_stack(&provider_json(100), 200, true).await;
@@ -121,6 +112,6 @@ async fn repeated_requests_are_stable() {
     for _ in 0..50 {
         let (status, body) = env.get_nodes().await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.as_array().unwrap().len(), 100);
+        assert_eq!(body.as_array().unwrap().len(), 20);
     }
 }

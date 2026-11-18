@@ -1,36 +1,29 @@
-//! Shared integration-test harness: a real PostgreSQL via Testcontainers, a
-//! local wiremock provider, and the application router exercised through
-//! `tower::ServiceExt::oneshot` (no sockets needed).
-// Common helpers are compiled into several test binaries; not every binary
-// uses every helper.
 #![allow(dead_code)]
 
-use axum::{Router, body::Body, http::Request, http::StatusCode};
+use axum::{
+    Router,
+    body::Body,
+    http::{HeaderMap, Request, StatusCode},
+};
 use nodes_svc::app::bootstrap::{AppComponents, build_components};
 use nodes_svc::app::config::AppConfig;
 use nodes_svc::features::nodes::commands::repository::SnapshotRepository;
 use serde_json::Value;
-use testcontainers_modules::postgres::Postgres;
-use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use tower::util::ServiceExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 pub const RANKINGS_PATH: &str = "/api/v1/lightning/nodes/rankings/connectivity";
 
-/// Fixture payload straight from the provider contract (3 nodes, includes an
-/// empty alias, zero firstSeen and a large capacity).
 pub const FIXTURE_BODY: &str = include_str!("../fixtures/mempool_response.json");
 
 pub struct TestEnv {
     pub router: Router,
     pub provider: MockServer,
     pub components: AppComponents,
-    #[expect(dead_code)] // container must stay alive for the whole test
-    container: testcontainers_modules::testcontainers::ContainerAsync<Postgres>,
+    pub database_url: String,
 }
 
-/// Build a provider payload with `count` unique nodes.
 pub fn provider_json(count: usize) -> String {
     let nodes: Vec<String> = (0..count)
         .map(|i| {
@@ -43,7 +36,6 @@ pub fn provider_json(count: usize) -> String {
     format!("[{}]", nodes.join(","))
 }
 
-/// Mount a rankings response on the provider.
 pub async fn mount_rankings(server: &MockServer, body: &str, status: u16, delay_ms: Option<u64>) {
     let mut template = ResponseTemplate::new(status).set_body_string(body);
     if let Some(delay) = delay_ms {
@@ -64,24 +56,39 @@ fn test_config(
     let mut config = AppConfig::default();
     config.mempool.base_url = provider_url;
     config.mempool.timeout = std::time::Duration::from_secs(mempool_timeout_seconds);
-    config.synchronization.sync_on_startup = false; // tests drive sync explicitly
+    config.synchronization.sync_on_startup = false;
     config.api.include_saved_at = include_saved_at;
     config
 }
 
-/// Full stack: PostgreSQL container + provider mock + migrated app.
-/// Panics are acceptable here: harness failures fail the test before any
-/// assertion runs.
+pub fn test_database_url() -> String {
+    dotenvy::dotenv().ok();
+    std::env::var("TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .expect("set TEST_DATABASE_URL to a PostgreSQL database for integration tests")
+}
+
+pub fn schema_url(database_url: &str, schema: &str) -> String {
+    let separator = if database_url.contains('?') { '&' } else { '?' };
+    format!("{database_url}{separator}options=-csearch_path%3D{schema}")
+}
+
+pub async fn create_test_schema(database_url: &str) -> (String, String) {
+    let schema = format!("test_{}", uuid::Uuid::new_v4().simple());
+    let admin = sqlx::PgPool::connect(database_url)
+        .await
+        .expect("connect to test PostgreSQL");
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .expect("create isolated test schema");
+    admin.close().await;
+    (schema_url(database_url, &schema), schema)
+}
+
 pub async fn start_stack(body: &str, status: u16, include_saved_at: bool) -> TestEnv {
-    let container = Postgres::default()
-        .start()
-        .await
-        .expect("postgres container");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("container port");
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    let base_url = test_database_url();
+    let (url, _schema) = create_test_schema(&base_url).await;
 
     let provider = MockServer::start().await;
     if !body.is_empty() {
@@ -97,18 +104,21 @@ pub async fn start_stack(body: &str, status: u16, include_saved_at: bool) -> Tes
         router: components.router.clone(),
         provider,
         components,
-        container,
+        database_url: base_url,
     }
 }
 
-/// Full stack with NO provider response mounted (provider "down").
 pub async fn start_stack_provider_down(include_saved_at: bool) -> TestEnv {
     start_stack("", 0, include_saved_at).await
 }
 
 impl TestEnv {
-    /// Issue a request against the router and return (status, json body).
     pub async fn get(&self, uri: &str) -> (StatusCode, Value) {
+        let (status, _, value) = self.get_with_headers(uri).await;
+        (status, value)
+    }
+
+    pub async fn get_with_headers(&self, uri: &str) -> (StatusCode, HeaderMap, Value) {
         let response = self
             .router
             .clone()
@@ -121,6 +131,7 @@ impl TestEnv {
             .await
             .expect("router serves request");
         let status = response.status();
+        let headers = response.headers().clone();
         let body = axum::body::to_bytes(response.into_body(), 1 << 20)
             .await
             .expect("body");
@@ -129,14 +140,13 @@ impl TestEnv {
         } else {
             serde_json::from_slice(&body).expect("json body")
         };
-        (status, value)
+        (status, headers, value)
     }
 
     pub async fn get_nodes(&self) -> (StatusCode, Value) {
         self.get("/nodes").await
     }
 
-    /// Drive one full synchronization cycle against the wired provider.
     pub async fn run_sync(
         &self,
     ) -> Result<

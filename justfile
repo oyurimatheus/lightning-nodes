@@ -1,93 +1,92 @@
-# Development task runner. Tool versions themselves are managed by mise.
-# Run `mise exec -- just --list` after `mise install`.
+# Executor de tarefas de desenvolvimento. As versões das ferramentas são
+# gerenciadas pelo mise. Execute `mise exec -- just --list` após `mise install`.
 
 default:
     @just --list
 
-# Prepare development tools and environment
+# Preparar as ferramentas e o ambiente de desenvolvimento
 setup:
     mise trust
     mise install
     cp -n .env.example .env || true
-    @echo "Setup complete. Use 'mise exec -- just <recipe>'."
+    @echo "Configuração concluída. Use 'mise exec -- just <comando>'."
 
-# Run the application locally (expects PostgreSQL from `just db-up`)
+# Executar a aplicação localmente (espera PostgreSQL iniciado com `just db-up`)
 dev:
     cargo run
 
-# Build the application (debug)
+# Compilar a aplicação (modo de depuração)
 build:
     cargo build
 
-# Build optimized release binary
+# Compilar o binário otimizado de release
 release:
     cargo build --release
 
-# Format code
+# Formatar o código
 fmt:
     cargo fmt
 
-# Validate formatting
+# Validar a formatação
 fmt-check:
     cargo fmt --check
 
-# Run Clippy with warnings as errors
+# Executar Clippy tratando avisos como erros
 lint:
     cargo clippy --all-targets -- -D warnings
 
-# Run cargo check
+# Executar cargo check
 check:
     cargo check
 
-# Run unit tests (no network, no Podman required)
+# Executar testes unitários (sem rede ou Podman)
 test:
     cargo test --lib
 
-# Run integration tests (requires Podman or a Docker-compatible runtime for Testcontainers)
+# Executar testes de integração (Testcontainers requer Podman ou runtime compatível com Docker)
 test-integration:
     cargo test --test '*' -- --test-threads=1
 
-# Run all tests
+# Executar todos os testes
 test-all: test test-integration
 
-# Start development PostgreSQL
+# Iniciar o PostgreSQL de desenvolvimento
 db-up:
-    podman compose -f docker/compose.yaml up -d postgres
-    @echo "Waiting for PostgreSQL to be healthy..."
-    until podman compose -f docker/compose.yaml exec -T postgres pg_isready -U lightning >/dev/null 2>&1; do sleep 1; done
+    podman-compose -p nodes-svc -f docker/docker-compose.yaml up -d postgres
+    @echo "Aguardando o PostgreSQL ficar saudável..."
+    until podman-compose -p nodes-svc -f docker/docker-compose.yaml exec -T postgres sh -c 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' >/dev/null 2>&1; do sleep 1; done
 
-# Stop development PostgreSQL without deleting data
+# Parar o PostgreSQL de desenvolvimento sem excluir os dados
 db-down:
-    podman compose -f docker/compose.yaml stop postgres
+    podman-compose -p nodes-svc -f docker/docker-compose.yaml stop postgres
 
-# Apply migrations to the development database
+# Aplicar migrações ao banco de desenvolvimento
 db-migrate:
     mise exec -- sqlx migrate run
 
-# Reset the development database (DESTRUCTIVE: drops the persistent volume)
+# Redefinir o banco de desenvolvimento (DESTRUTIVO: remove o volume persistente)
 db-reset:
-    @echo "WARNING: this deletes the development database volume and all data."
-    @read -p "Type 'yes' to continue: " answer && [ "$$answer" = "yes" ]
-    podman compose -f docker/compose.yaml down -v
+    @echo "AVISO: esta operação exclui o volume do banco de desenvolvimento e todos os dados."
+    @read -p "Digite 'sim' para continuar: " answer && [ "$$answer" = "sim" ]
+    podman-compose -p nodes-svc -f docker/docker-compose.yaml down -v
     just db-up
 
-# Start the complete Compose stack (migrations run at app startup)
+# Iniciar toda a stack Compose (migrações executadas ao iniciar a aplicação)
 up:
-    podman compose -f docker/compose.yaml up --build -d
+    podman-compose -p nodes-svc -f docker/docker-compose.yaml up --build -d
 
-# Stop the stack without removing volumes
+# Parar a stack sem remover os volumes
 down:
-    podman compose -f docker/compose.yaml down
+    podman-compose -p nodes-svc -f docker/docker-compose.yaml down
 
-# Display application logs
+# Exibir os logs da aplicação
 logs:
-    podman compose -f docker/compose.yaml logs -f app
+    podman-compose -p nodes-svc -f docker/docker-compose.yaml logs -f app
 
-# Execute benchmark tooling (requires a running stack: `just up`)
+# Executar benchmark (requer a stack em execução: `just up`)
 benchmark:
     ./scripts/benchmark.sh
 
-# Execute all CI quality checks
-ci: fmt-check lint check
-    cargo test --lib
+# Executar localmente todas as verificações de qualidade
+ci: fmt-check lint check test-all
     cargo build --release

@@ -3,10 +3,6 @@ use std::sync::Arc;
 use crate::features::nodes::commands::repository::SnapshotRepository;
 use crate::shared::error::AppError;
 
-/// Retention policy execution. Deletion happens in a single bounded SQL
-/// statement (see `SnapshotRepository::cleanup_history`), separate from HTTP
-/// request processing, and it can never remove the active snapshot or drop
-/// history below the configured minimum.
 pub struct HistoryCleanup {
     repository: Arc<dyn SnapshotRepository>,
 }
@@ -16,7 +12,6 @@ impl HistoryCleanup {
         Self { repository }
     }
 
-    /// Returns the number of removed snapshots.
     pub async fn run(
         &self,
         retention_days: u32,

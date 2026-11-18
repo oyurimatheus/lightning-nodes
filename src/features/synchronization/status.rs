@@ -15,7 +15,6 @@ pub enum SyncState {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LastSuccess {
-    /// `saved_at` of the snapshot published in that synchronization.
     pub at: DateTime<Utc>,
     pub snapshot_id: Uuid,
     pub node_count: u64,
@@ -33,7 +32,7 @@ pub struct SyncStatus {
     pub state: SyncState,
     pub last_success: Option<LastSuccess>,
     pub last_failure: Option<LastFailure>,
-    /// Node count of the last attempt (success or failure payload size).
+
     pub last_snapshot_count: Option<u64>,
 }
 
@@ -48,8 +47,6 @@ impl Default for SyncStatus {
     }
 }
 
-/// Thread-safe synchronization status shared between the scheduler and the
-/// `/sync/status` endpoint.
 #[derive(Default)]
 pub struct SyncStatusHandle {
     inner: RwLock<SyncStatus>,

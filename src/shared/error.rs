@@ -5,9 +5,6 @@ use axum::{
 };
 use serde_json::json;
 
-/// Application error taxonomy. Each variant is an actionable, categorized
-/// failure; internal details (SQL errors, connection strings) are never
-/// propagated to API consumers.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AppError {
     #[error("configuration error: {0}")]
@@ -45,7 +42,6 @@ pub enum AppError {
 }
 
 impl AppError {
-    /// Short machine-readable category used in logs and `/sync/status`.
     pub fn category(&self) -> &'static str {
         match self {
             AppError::Configuration(_) => "configuration_error",
@@ -62,8 +58,6 @@ impl AppError {
         }
     }
 
-    /// Provider/payload errors are retriable within a sync cycle;
-    /// configuration errors are not.
     pub fn is_provider_error(&self) -> bool {
         matches!(
             self,
@@ -78,7 +72,6 @@ impl AppError {
     }
 }
 
-/// HTTP mapping for errors escaping a handler: never leak internals.
 #[derive(Debug)]
 pub struct ApiError(pub AppError);
 

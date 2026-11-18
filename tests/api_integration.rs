@@ -1,6 +1,3 @@
-//! HTTP API integration scenarios against a real PostgreSQL and a local
-//! provider mock.
-
 mod common;
 
 use axum::http::StatusCode;
@@ -14,8 +11,6 @@ async fn setup(body: &str) -> TestEnv {
     start_stack(body, 200, true).await
 }
 
-/// Scenario 1 — Initial synchronization: snapshot created, nodes persisted,
-/// published, and served by `GET /nodes`.
 #[tokio::test]
 async fn scenario_1_initial_synchronization() {
     let env = setup(&provider_json(3)).await;
@@ -30,7 +25,7 @@ async fn scenario_1_initial_synchronization() {
     let first = &nodes[0];
     assert_eq!(first["public_key"], "pk000000");
     assert_eq!(first["alias"], "Node 0");
-    // 7 satoshis -> "0.00000007", integer conversion.
+
     assert_eq!(first["capacity"], "0.00000007");
     assert_eq!(first["first_seen"], "2018-04-05T15:13:42Z");
     assert!(
@@ -39,22 +34,54 @@ async fn scenario_1_initial_synchronization() {
     );
 }
 
-/// Scenario 2 — Provider timeout: active snapshot A stays active and served.
+#[tokio::test]
+async fn nodes_endpoint_paginates_with_headers() {
+    let env = setup(&provider_json(5)).await;
+    env.run_sync().await.expect("sync");
+
+    let (status, headers, body) = env.get_with_headers("/nodes?page=2&per_page=2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-total-count"], "5");
+    assert_eq!(headers["x-page"], "2");
+    assert_eq!(headers["x-per-page"], "2");
+    assert_eq!(headers["x-total-pages"], "3");
+    let nodes = body.as_array().expect("array response");
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0]["public_key"], "pk000002");
+    assert_eq!(nodes[1]["public_key"], "pk000003");
+
+    let (_, _, last_page) = env.get_with_headers("/nodes?page=3&per_page=2").await;
+    assert_eq!(last_page.as_array().unwrap().len(), 1);
+    assert_eq!(last_page[0]["public_key"], "pk000004");
+
+    let (_, _, beyond_last_page) = env.get_with_headers("/nodes?page=4&per_page=2").await;
+    assert_eq!(beyond_last_page, json!([]));
+}
+
+#[tokio::test]
+async fn nodes_endpoint_rejects_invalid_pagination() {
+    let env = setup(&provider_json(1)).await;
+
+    for uri in ["/nodes?page=0", "/nodes?per_page=0", "/nodes?per_page=101"] {
+        let (status, _) = env.get(uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+    }
+}
+
 #[tokio::test]
 async fn scenario_2_provider_timeout_preserves_active_snapshot() {
     let env = start_stack(&provider_json(2), 200, true).await;
-    // First cycle succeeds.
+
     env.run_sync().await.expect("first sync");
     let snapshot_a = env.active_snapshot_id().await;
 
-    // Second cycle: provider hangs longer than the client timeout.
-    // wiremock checks newer mocks first, so this slow mock wins.
+    env.provider.reset().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/lightning/nodes/rankings/connectivity"))
         .respond_with(
             wiremock::ResponseTemplate::new(200)
                 .set_body_string(provider_json(5))
-                .set_delay(std::time::Duration::from_millis(7_000)), // > 5s client timeout
+                .set_delay(std::time::Duration::from_millis(7_000)),
         )
         .mount(&env.provider)
         .await;
@@ -76,14 +103,13 @@ async fn scenario_2_provider_timeout_preserves_active_snapshot() {
     );
 }
 
-/// Scenario 3 — Provider HTTP 500: no data is removed.
 #[tokio::test]
 async fn scenario_3_provider_500_preserves_data() {
     let env = setup(&provider_json(2)).await;
     env.run_sync().await.expect("first sync");
     let snapshot_a = env.active_snapshot_id().await;
 
-    // A newer mock returning 500 wins over the original successful one.
+    env.provider.reset().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/lightning/nodes/rankings/connectivity"))
         .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("boom"))
@@ -100,13 +126,13 @@ async fn scenario_3_provider_500_preserves_data() {
     assert_eq!(body.as_array().unwrap().len(), 2);
 }
 
-/// Scenario 4 — Invalid JSON payload cannot replace the active snapshot.
 #[tokio::test]
 async fn scenario_4_invalid_json_rejected() {
     let env = setup(&provider_json(2)).await;
     env.run_sync().await.expect("first sync");
     let snapshot_a = env.active_snapshot_id().await;
 
+    env.provider.reset().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/lightning/nodes/rankings/connectivity"))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("<html>oops</html>"))
@@ -120,8 +146,6 @@ async fn scenario_4_invalid_json_rejected() {
     assert_eq!(body.as_array().unwrap().len(), 2);
 }
 
-/// Scenario 9 — saved_at: identical across nodes of one snapshot and stable
-/// across repeated requests.
 #[tokio::test]
 async fn scenario_9_saved_at_is_stable_and_shared() {
     let env = setup(&provider_json(5)).await;
@@ -142,7 +166,6 @@ async fn scenario_9_saved_at_is_stable_and_shared() {
     );
 }
 
-/// Scenario 10 — Compatibility mode: exactly the original four fields.
 #[tokio::test]
 async fn scenario_10_original_contract_without_saved_at() {
     let env = start_stack(&provider_json(2), 200, false).await;
@@ -158,7 +181,6 @@ async fn scenario_10_original_contract_without_saved_at() {
     }
 }
 
-/// Scenario 12 — Server starts even when the provider is down.
 #[tokio::test]
 async fn scenario_12_server_starts_with_provider_down() {
     let env = start_stack_provider_down(true).await;
@@ -172,9 +194,13 @@ async fn scenario_12_server_starts_with_provider_down() {
         "readiness depends on the database, not the provider"
     );
 
-    let (status, body) = env.get_nodes().await;
+    let (status, headers, body) = env.get_with_headers("/nodes").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!([]), "empty database serves an empty array");
+    assert_eq!(headers["x-total-count"], "0");
+    assert_eq!(headers["x-page"], "1");
+    assert_eq!(headers["x-per-page"], "20");
+    assert_eq!(headers["x-total-pages"], "0");
 
     assert!(
         env.run_sync().await.is_err(),
@@ -188,7 +214,6 @@ async fn scenario_12_server_starts_with_provider_down() {
     );
 }
 
-/// Scenario 13 — `GET /nodes` never touches the external provider.
 #[tokio::test]
 async fn scenario_13_reads_never_call_provider() {
     let env = setup(&provider_json(2)).await;
@@ -215,7 +240,6 @@ async fn scenario_13_reads_never_call_provider() {
     );
 }
 
-/// Scenario 14 — Parallel requests during an import succeed and stay coherent.
 #[tokio::test]
 async fn scenario_14_parallel_requests_during_import() {
     let env = start_stack(&provider_json(10), 200, true).await;
@@ -223,8 +247,6 @@ async fn scenario_14_parallel_requests_during_import() {
         .await
         .expect("first sync publishes snapshot A (10 nodes)");
 
-    // New payload of 15 nodes becomes snapshot B mid-reads.
-    // wiremock gives precedence to the most recently mounted mock.
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path(
             "/api/v1/lightning/nodes/rankings/connectivity",
@@ -286,7 +308,6 @@ async fn scenario_14_parallel_requests_during_import() {
     );
 }
 
-/// Extra: `/sync/status` shape after a successful cycle.
 #[tokio::test]
 async fn sync_status_reports_success() {
     let env = setup(&provider_json(2)).await;
@@ -303,7 +324,6 @@ async fn sync_status_reports_success() {
     );
 }
 
-/// Extra: empty alias is preserved exactly (documented policy).
 #[tokio::test]
 async fn empty_alias_preserved() {
     let env = setup(common::FIXTURE_BODY).await;

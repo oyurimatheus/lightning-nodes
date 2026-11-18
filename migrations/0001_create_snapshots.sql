@@ -1,7 +1,7 @@
--- Immutable snapshot headers. A snapshot goes through the lifecycle:
---   loading -> ready    (successful publication; saved_at assigned by PostgreSQL)
---   loading -> failed   (import or publication failure; active snapshot untouched)
--- Historical 'ready' snapshots are retained according to [history] config.
+
+
+
+
 
 CREATE TABLE node_snapshots (
     id            UUID PRIMARY KEY,

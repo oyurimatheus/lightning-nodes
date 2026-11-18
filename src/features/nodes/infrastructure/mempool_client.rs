@@ -4,11 +4,6 @@ use std::time::Duration;
 
 use crate::shared::error::AppError;
 
-/// DTO for the mempool.space connectivity ranking response.
-///
-/// Only the fields the application consumes are required; extra fields are
-/// ignored (provider may evolve the payload). Monetary and time values stay
-/// in integer form — never floats.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderNode {
@@ -26,8 +21,6 @@ pub struct ProviderNode {
     pub country: Option<serde_json::Value>,
 }
 
-/// Source of provider node data, isolated behind a trait so the sync use case
-/// can be unit-tested with fakes and integration-tested with wiremock.
 #[async_trait]
 pub trait NodeProvider: Send + Sync {
     async fn fetch_nodes(&self) -> Result<Vec<ProviderNode>, AppError>;

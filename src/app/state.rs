@@ -1,4 +1,3 @@
-/// Shared application state handed to every handler.
 pub struct AppState {
     pub reader: std::sync::Arc<dyn crate::features::nodes::queries::repository::NodeReader>,
     pub repository:

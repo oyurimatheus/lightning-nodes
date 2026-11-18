@@ -1,56 +1,52 @@
-# Lightning Nodes Service
+# Nodes service
 
-A production-quality Rust backend for the **Superhuman Back-end Coding Challenge**:
-it imports Lightning Network node connectivity rankings from [mempool.space],
-persists them in PostgreSQL as **immutable versioned snapshots**, and serves the
-latest successfully published snapshot over HTTP.
+Importa o ranking de conectividade de nós da Lightning Network da [API do mempool.space], persiste os dados no PostgreSQL em **snapshots versionados e imutáveis** e disponibiliza o snapshot publicado mais recente por HTTP.
 
-[mempool.space]: https://mempool.space/api/v1/lightning/nodes/rankings/connectivity
+[API do mempool.space]: https://mempool.space/api/v1/lightning/nodes/rankings/connectivity
 
-## Overview
+## Visão geral
 
-- **Import**: a background scheduler fetches `GET /api/v1/lightning/nodes/rankings/connectivity` every 10 minutes (configurable), validates the complete payload, and persists it as a new snapshot.
-- **Publish**: publication is an atomic PostgreSQL transaction: verify count → mark `ready` → assign `saved_at` (PostgreSQL server time) → flip the `active_snapshot` pointer.
-- **Serve**: `GET /nodes` returns the nodes of the active snapshot only. Failed imports never touch the active snapshot.
-- **History**: successful snapshots are retained per a configurable retention policy; failed attempts are recorded for observability.
+- **Importação**: um scheduler em segundo plano consulta `GET /api/v1/lightning/nodes/rankings/connectivity` a cada 10 minutos (configurável), valida todo o conteúdo e persiste um novo snapshot.
+- **Publicação**: uma transação atômica no PostgreSQL verifica a contagem, marca o snapshot como `ready`, define `saved_at` com o horário do servidor PostgreSQL e atualiza o ponteiro `active_snapshot`.
+- **Exposição**: `GET /nodes` retorna somente os nós do snapshot ativo. Uma importação com falha não altera o snapshot ativo.
+- **Histórico**: snapshots bem-sucedidos são mantidos conforme uma política de retenção configurável; tentativas com falha são registradas para observabilidade.
 
-## Architecture
+## Arquitetura
 
-Modular monolith, **package by feature** (no global `controllers/`/`services/` layers):
+Monólito modular organizado por funcionalidade (**Package by Feature**), sem camadas globais `controllers/` ou `services/` que misturem funcionalidades:
 
-```
+```text
 src/
-├── app/            bootstrap, router, configuration, shared state
-├── shared/         error taxonomy, database pools, telemetry
+├── app/            inicialização, roteador, configuração e estado compartilhado
+├── shared/         erros, pools de banco de dados e telemetria
 └── features/
     ├── nodes/
-    │   ├── domain/           entities + pure transformations (integer-only math)
-    │   ├── commands/         write use case + repository trait
-    │   ├── queries/          read use case + reader trait
-    │   ├── infrastructure/   mempool client, Postgres reader/writer
-    │   └── http/             handlers, DTOs, routes
-    ├── synchronization/      scheduler, status, history cleanup
-    └── health/               liveness/readiness probes
+    │   ├── domain/           entidades e transformações puras (aritmética inteira)
+    │   ├── commands/         caso de uso de escrita e interface do repositório
+    │   ├── queries/          caso de uso de leitura e interface do leitor
+    │   ├── infrastructure/   cliente mempool.space e adaptadores PostgreSQL
+    │   └── http/             handlers, DTOs e rotas
+    ├── synchronization/      agendador, status e limpeza do histórico
+    └── health/               verificações de disponibilidade
 ```
 
-- **Read/write separation** (logical CQRS): the read path is a single indexed query; the write path is batched append-only inserts plus a short publication transaction.
-- HTTP handlers are thin; business behavior lives in feature use cases; domain logic is independent of Axum and SQLx.
-- No Redis, no Kafka, no microservices.
+
+### Diagrama do projeto
 
 ```mermaid
 flowchart LR
-    subgraph external
+    subgraph externos[Serviços externos]
         MP[mempool.space API]
     end
-    subgraph process["nodes-svc (Rust / Axum)"]
-        SCH[Scheduler] --> SYNC[Sync use case]
-        SYNC -->|fetch| MP
-        SYNC --> W[Postgres writer]
-        H[HTTP /nodes] --> R[Postgres reader]
-        ST[/sync/status] --> STATUS[SyncStatus]
+    subgraph app[nodes-svc — Rust / Axum]
+        SCH[Agendador] --> SYNC[Caso de uso de sincronização]
+        SYNC -->|busca dados| MP
+        SYNC --> W[Escritor PostgreSQL]
+        H[HTTP /nodes] --> R[Leitor PostgreSQL]
+        ST[/sync/status] --> STATUS[Status da sincronização]
         SYNC --> STATUS
     end
-    subgraph db[(PostgreSQL)]
+    subgraph db[PostgreSQL]
         NS[node_snapshots] --- LN[lightning_nodes]
         NS --- AS[active_snapshot singleton]
     end
@@ -58,109 +54,102 @@ flowchart LR
     R --> AS
 ```
 
-## Technology stack
+Os diagramas estão em [`docs/arquitetura.md`](docs/arquitetura.md).
 
-| Component | Choice |
+## Tecnologias
+
+| Componente | Tecnologia |
 |---|---|
-| Language | Rust 1.94, edition 2024 |
+| Linguagem | Rust 1.94 |
 | HTTP | Axum 0.8 |
-| Runtime | Tokio |
-| DB | PostgreSQL 17, SQLx 0.8 |
-| Provider client | Reqwest (rustls, timeouts) |
-| Config | TOML + env vars |
-| Errors / logs | thiserror, tracing |
-| Tooling | mise, just |
-| Tests | Testcontainers (real Postgres), wiremock |
+| Banco de dados | PostgreSQL 17, SQLx 0.8 |
+| Configuração | TOML + variáveis de ambiente |
+| Ferramentas | mise, just |
 
-## Running locally
+## Execução local
 
 ```bash
-mise trust && mise install     # pins Rust, just, sqlx-cli
-cp .env.example .env           # adjust DATABASE_URL if needed
-mise exec -- just db-up        # starts development PostgreSQL
-mise exec -- just db-migrate   # optional; the app also migrates on startup
-mise exec -- just dev          # runs the application on :3000
+mise trust && mise install     # instala as ferramentas nas versões fixadas
+cp .env.example .env           # ajuste DATABASE_URL se necessário
+mise exec -- just db-up        # inicia o PostgreSQL de desenvolvimento
+mise exec -- just db-migrate   # opcional; a aplicação também migra ao iniciar
+mise exec -- just dev          # executa a aplicação na porta 3000
 ```
 
-All commands: `mise exec -- just --list`.
+Para listar os comandos: `mise exec -- just --list`.
 
-## Running with Podman
-
-Podman (or a Docker-compatible runtime) is required for the container stack.
-`podman compose` wraps a compose provider (`podman-compose` or
-`docker-compose`); configure it once if needed:
+## Execução com Podman
 
 ```bash
-# one-time, if podman has no compose provider configured yet
-podman config set runtime.compose_provider podman-compose
-```
-
-```bash
-podman compose -f docker/compose.yaml up --build -d    # PostgreSQL + application
+podman-compose -p nodes-svc -f docker/docker-compose.yaml up --build -d  # PostgreSQL + aplicação
 curl http://localhost:3000/nodes
 ```
 
-Logs: `podman compose -f docker/compose.yaml logs -f app`. Stop without deleting data: `podman compose -f docker/compose.yaml down`.
-Reset the database (destructive): `just db-reset`.
+**As migrações** são executadas pela aplicação antes de o servidor começar a aceitar conexões. O SQLx registra as migrações aplicadas em `_sqlx_migrations` e usa um advisory lock do PostgreSQL, evitando concorrência entre inicializações; a aplicação também aguarda a verificação de saúde do serviço PostgreSQL.
 
-**Migrations** run during application startup before the server binds. This is
-safe because sqlx records applied migrations in `_sqlx_migrations` and takes a
-PostgreSQL advisory lock, so concurrent starters cannot race; the app also
-waits for the `postgres` health check before starting.
+> `just db-reset` é destrutivo: remove o volume de dados local e solicita confirmação explícita. Os comandos comuns de parada preservam os volumes.
 
-### Verifying with curl
+### Verificação com curl
 
 ```bash
-# List nodes (extended mode: includes saved_at)
+# Listar nós (modo estendido: inclui saved_at)
 curl -i http://localhost:3000/nodes
 
-# Liveness — always 200 while the process runs
+# Liveness — retorna 200 enquanto o processo estiver em execução
 curl -i http://localhost:3000/health/live
 
-# Readiness — 200 when the database is reachable
+# Readiness — retorna 200 quando o banco estiver acessível
 curl -i http://localhost:3000/health/ready
 
-# Synchronization status — last success/failure and active snapshot id
+# Estado da sincronização — último sucesso/falha e ID do snapshot ativo
 curl -i http://localhost:3000/sync/status
 
-# Pretty-print the nodes payload
+# Exibir a resposta formatada
 curl -s http://localhost:3000/nodes | jq .
 ```
 
-## Configuration
+## Configuração
+| Chave (TOML) | Variável de ambiente | Padrão | Descrição |
+|---|---|---:|---|
+| `database.url` | `DATABASE_URL` | — (obrigatório) | URL de conexão do PostgreSQL |
+| `server.host` | `SERVER_HOST` | `0.0.0.0` | Endereço de escuta |
+| `server.port` | `SERVER_PORT` | `3000` | Porta HTTP |
+| `database.read_pool_max_connections` | — | `10` | Tamanho do pool de leitura |
+| `database.write_pool_max_connections` | — | `2` | Tamanho do pool de escrita |
+| `database.acquire_timeout` | `DB_ACQUIRE_TIMEOUT` | `5s` | Timeout para obter conexão do pool |
+| `mempool.base_url` | `MEMPOOL_BASE_URL` | `https://mempool.space` | URL base do provedor |
+| `mempool.timeout` | `MEMPOOL_TIMEOUT` | `10s` | Timeout de conexão e requisição |
+| `synchronization.interval` | `SYNC_INTERVAL` | `600s` | Intervalo entre sincronizações |
+| `synchronization.batch_size` | `SYNC_BATCH_SIZE` | `500` | Tamanho do lote de inserção (máximo 13.107) |
+| `synchronization.sync_on_startup` | `SYNC_ON_STARTUP` | `true` | Executa importação na inicialização |
+| `synchronization.reject_empty_response` | `REJECT_EMPTY_RESPONSE` | `true` | Trata resposta vazia como falha |
+| `history.retention_days` | `HISTORY_RETENTION_DAYS` | `30` | Remove snapshots inativos expirados |
+| `history.minimum_successful_snapshots` | `HISTORY_MINIMUM_SUCCESSFUL_SNAPSHOTS` | `3` | Quantidade mínima de snapshots `ready` preservados |
+| `api.include_saved_at` | `API_INCLUDE_SAVED_AT` | `true` | Inclui `saved_at` em `/nodes` |
+| — | `RUST_LOG` | `info` | Filtro do tracing |
 
-Precedence: **environment variables > `config/default.toml` > built-in defaults**.
-Duration values use [humantime](https://docs.rs/humantime) syntax (`"5s"`,
-`"600s"`, `"10m"`, `"1h 30s"`) in both TOML and environment variables.
+Valores inválidos (intervalo zero, pools vazios, lotes acima do limite ou booleanos inválidos) são rejeitados na inicialização com mensagens de erro explicativas.
 
-| Key (TOML) | Env var | Default | Meaning |
-|---|---|---|---|
-| `database.url` | `DATABASE_URL` | — (required) | PostgreSQL connection string |
-| `server.host` | `SERVER_HOST` | `0.0.0.0` | Bind host |
-| `server.port` | `SERVER_PORT` | `3000` | Bind port |
-| `database.read_pool_max_connections` | — | `10` | Read pool size |
-| `database.write_pool_max_connections` | — | `2` | Write pool size |
-| `database.acquire_timeout` | `DB_ACQUIRE_TIMEOUT` | `5s` | Pool acquire timeout |
-| `mempool.base_url` | `MEMPOOL_BASE_URL` | `https://mempool.space` | Provider base URL |
-| `mempool.timeout` | `MEMPOOL_TIMEOUT` | `10s` | Request + connect timeout |
-| `synchronization.interval` | `SYNC_INTERVAL` | `600s` | Sync period |
-| `synchronization.batch_size` | `SYNC_BATCH_SIZE` | `500` | Insert batch size (≤ 13107) |
-| `synchronization.sync_on_startup` | `SYNC_ON_STARTUP` | `true` | Import once at startup |
-| `synchronization.reject_empty_response` | `REJECT_EMPTY_RESPONSE` | `true` | Treat empty payload as failure |
-| `history.retention_days` | `HISTORY_RETENTION_DAYS` | `30` | Remove inactive snapshots older than this |
-| `history.minimum_successful_snapshots` | `HISTORY_MINIMUM_SUCCESSFUL_SNAPSHOTS` | `3` | Always keep this many ready snapshots |
-| `api.include_saved_at` | `API_INCLUDE_SAVED_AT` | `true` | Extend `/nodes` with `saved_at` |
-| — | `RUST_LOG` | `info` | tracing filter |
-
-Invalid values (zero intervals, zero pools, oversized batches, bad booleans)
-are rejected at startup with actionable errors.
-
-## API reference
+## Referência da API
 
 ### `GET /nodes`
 
-Nodes of the latest successfully published snapshot. `200 OK` with `[]` before
-the first successful import.
+Retorna uma página dos nós do snapshot publicado mais recentemente, mantendo a
+resposta como array JSON para preservar o contrato existente. Antes da primeira
+importação bem-sucedida, retorna `200 OK` com `[]`.
+
+Parâmetros de consulta:
+
+| Parâmetro | Padrão | Limite | Descrição |
+|---|---:|---:|---|
+| `page` | `1` | maior que zero | Número da página, começando em 1 |
+| `per_page` | `20` | de 1 a 100 | Quantidade de nós por página |
+
+Exemplo: `GET /nodes?page=2&per_page=25`. A ordenação é estável por `public_key`.
+Além do array de nós, a resposta inclui os cabeçalhos `X-Total-Count`,
+`X-Page`, `X-Per-Page` e `X-Total-Pages`. Uma página além do fim retorna
+`200 OK`, `[]` e os metadados totais. Parâmetros fora dos limites retornam
+`400 Bad Request`.
 
 ```json
 [
@@ -174,20 +163,24 @@ the first successful import.
 ]
 ```
 
-| Field | Behavior |
+| Campo | Comportamento |
 |---|---|
-| `public_key` | Preserved exactly |
-| `alias` | Preserved exactly (including empty aliases) |
-| `capacity` | Satoshi→BTC via integer arithmetic, exactly 8 decimals |
-| `first_seen` | Unix seconds → RFC 3339 UTC, second precision, `Z` |
-| `saved_at` | Publication timestamp persisted by PostgreSQL; shared by all nodes of the snapshot; stable between requests |
+| `public_key` | Preservado exatamente como recebido |
+| `alias` | Preservado exatamente, inclusive quando vazio |
+| `capacity` | Conversão de satoshis para BTC com aritmética inteira e exatamente 8 casas decimais |
+| `first_seen` | Segundos Unix convertidos para RFC 3339 UTC, precisão de segundos e sufixo `Z` |
+| `saved_at` | Horário de publicação persistido pelo PostgreSQL; igual para todos os nós do snapshot e estável entre requisições |
 
-**Compatibility mode**: set `API_INCLUDE_SAVED_AT=false` to omit `saved_at`,
-restoring the original challenge contract of exactly four fields. Both modes
-are tested.
+**Compatibilidade com o desafio original**: defina `API_INCLUDE_SAVED_AT=false` para omitir `saved_at` e retornar exatamente os quatro campos originalmente exigidos. Os dois modos são cobertos por testes.
 
-### `GET /health/live` — always `200` while the process runs.
-### `GET /health/ready` — `200` when the database is reachable. A failed synchronization does **not** fail readiness while the last valid snapshot is servable; staleness is exposed via `/sync/status`.
+### `GET /health/live`
+
+Verificação de liveness. Retorna `200` enquanto o processo estiver em execução.
+
+### `GET /health/ready`
+
+Verificação de readiness. Retorna `200` quando o banco de dados está acessível. Uma falha de sincronização não torna o serviço indisponível enquanto o último snapshot válido puder ser servido; a defasagem pode ser observada em `/sync/status`.
+
 ### `GET /sync/status`
 
 ```json
@@ -200,19 +193,19 @@ are tested.
 }
 ```
 
-Executable requests live in [`requests/lightning-nodes.http`](requests/lightning-nodes.http).
+Requisições prontas para execução estão em [`requests/lightning-nodes.http`](requests/lightning-nodes.http).
 
-## Database design
+## Modelo de dados
 
 ```mermaid
 erDiagram
     node_snapshots ||--o{ lightning_nodes : "snapshot_id"
-    node_snapshots ||--o| active_snapshot : "singleton pointer"
+    node_snapshots ||--o| active_snapshot : "ponteiro"
     node_snapshots {
         uuid id PK
         text status "loading | ready | failed"
         timestamptz created_at
-        timestamptz saved_at "set by PostgreSQL on publication"
+        timestamptz saved_at "definido pelo Postgres"
         int node_count
         text error_message
     }
@@ -230,96 +223,27 @@ erDiagram
     }
 ```
 
-Lifecycle: `loading` → `ready` (successful, atomic publication) or
-`loading` → `failed` (recorded, active snapshot untouched). Nodes cascade on
-snapshot deletion, so retention cleanup is one bounded statement.
+Ciclo de vida: `loading` → `ready` (importação bem-sucedida, publicação atômica) ou `loading` → `failed` (falha registrada, snapshot ativo preservado). Os nós são removidos em cascata quando um snapshot é excluído, permitindo que a limpeza seja feita em uma operação limitada.
 
-**Failure during sync**: a crash mid-import leaves a `loading` snapshot that
-can never become active (publication requires verifying the row count inside
-the transaction); a later cleanup reaps stale snapshots. Multiple instances are
-serialized with `pg_advisory_xact_lock` at publication, and in-process overlap
-is prevented by a scheduler mutex.
+**Falha durante a sincronização**: uma queda do processo durante a importação pode deixar um snapshot `loading`, que não pode ser ativado sem a verificação da contagem de registros na transação de publicação. A limpeza posterior remove snapshots expirados. Várias instâncias são serializadas no momento da publicação por `pg_advisory_xact_lock`; um mutex do agendador impede sobreposição dentro do processo.
 
-**Why snapshots instead of UPSERT/full-replace**: historical versions are
-preserved, publication is a single-row flip (no rewrite of live rows), readers
-never block, and rollback is trivial — a failed import simply never publishes.
+**Por que snapshots em vez de UPSERT/substituição completa**: versões históricas são preservadas, a publicação altera um único ponteiro, leitores não ficam bloqueados e a recuperação é simples — uma importação malsucedida nunca é publicada — ao custo de armazenamento adicional.
 
-## Performance
-
-Read path (`GET /nodes`) is one query over the covering index
-`lightning_nodes (snapshot_id, public_key) INCLUDE (alias, capacity_sats,
-first_seen)`: index-only scan, no N+1, deterministic order. Run
-`EXPLAIN (ANALYZE, BUFFERS) <query>` on your dataset to verify; the query text
-is in `src/features/nodes/infrastructure/postgres_reader.rs`.
-
-Write path uses `QueryBuilder` batched multi-row inserts (batch size
-`SYNC_BATCH_SIZE`, clamped to respect the 65535-parameter limit), followed by a
-short publication transaction. `COPY FROM STDIN` was considered but not
-implemented: the real mempool ranking (~3–4k nodes) imports in well under a
-second with batched inserts, so the added complexity is not justified without
-measurements.
-
-Benchmark: `just up` then `just benchmark` (wraps
-[`scripts/benchmark.sh`](scripts/benchmark.sh), which reports p50/p95/p99 of
-the **full HTTP endpoint** under concurrency). Dataset sizes 100/1k/10k/100k
-are benchmarks *targets* for evaluating scaling behavior, not assumptions
-about the real response. No latency numbers are claimed without running the
-script in your environment.
-
-## Testing
+## Testes
 
 ```bash
-just test               # unit tests (no network, no Podman)
-just test-integration   # integration tests (requires Podman or a Docker-compatible runtime)
+just test               # testes unitários (sem rede ou Podman)
+just test-integration   # testes de integração (requer Podman ou runtime compatível com Docker)
 just test-all
-just ci                 # fmt-check + clippy -D warnings + check + unit + release
+just ci                 # fmt-check + clippy -D warnings + check + todos os testes + release
 ```
 
-- **Unit tests**: monetary conversions (incl. the spec examples), timestamp
-  conversions (epoch zero, pre-epoch, out-of-range), domain validation,
-  configuration precedence and validation, sync use case with fakes (success,
-  provider failure, persistence failure, empty payload, duplicates).
-- **Integration tests** (15 scenarios): initial import, provider
-  timeout/500/invalid JSON, database failure, snapshot replacement, history
-  retention, atomic publication under concurrent reads, `saved_at` stability,
-  compatibility mode, cleanup policy, startup with provider down, reads never
-  calling the provider, parallel request consistency, migration/constraint
-  validation.
+## Perguntas referentes ao desafio
 
-## Trade-offs
-
-- **PostgreSQL only**: one stateful dependency covers persistence, atomic
-  publication (transactions + advisory locks) and history; Redis/Kafka would
-  add operational surface without solving a measured problem.
-- **Modular monolith, not microservices**: one deployable, one database;
-  features are isolated in code, not over the network.
-- **Snapshot versioning over in-place updates**: immutability gives history,
-  atomic flips and cheap rollback for the cost of some storage.
-- **Batched inserts over COPY**: simpler, fast enough for the real payload;
-  revisit only with benchmark evidence.
-- **No in-memory cache in v1**: the indexed single query is already the
-  bottleneck-free path; a cache would add invalidation complexity. It can be
-  added behind `ListNodes` if benchmarks justify it.
-
-## Original challenge questions
-
-- **What was the reason for your focus?** Correctness of the snapshot lifecycle
-  (never serving mixed or partial data) and read latency; those are the parts
-  users observe.
-- **What problems were you trying to solve?** Atomic publication, failure
-  isolation between import and serving, precise monetary/time formatting, and
-  reproducible operations (mise/just/CI).
-- **How long did this take?** _To be filled by the developer._
-- **What trade-offs did you make?** See the Trade-offs section; the most
-  notable is skipping COPY and caching without measurements.
-- **What would you do differently with more time?** Add Prometheus metrics
-  exposition and a `COPY`-based importer benchmark for 100k+ datasets.
-- **What is the weakest part?** The benchmark script is curl-based, not a
-  proper load tool (no warmup phase or ramp profiles).
-- **What additional information would be useful?** Expected production load
-  and number of replicas, to size pools and decide on distributed scheduler
-  fencing beyond advisory locks.
-
-## License
-
-MIT
+- **Qual foi o foco e por quê?** A criação da máquina de estado dos snapshots e a entrega de um dado mesmo que "frio" caso a API externa apresente latência ou falha.
+- **Que problemas a solução busca resolver?** Isolamento entre atualizações (criação do snapshots) e uma entrega rápida mesmo sem um cache.
+- **Quanto tempo foi dedicado ao projeto?** Cerca de 12 horas
+- **Quais tradeoffs foram feitos?** Não utilização de cache a fim de simplificar a atualização dos dados. Além disso, a política de retenção de dados antigos foi configurada por 30 dias, a fim de manter o tamanho do banco estável 
+- **O que seria feito com mais tempo?** Adicionar métricas customizadas e a criação dos dashboards em alguma ferramenta.
+- **Qual é a parte mais fraca?** O benchmark usa curl, em vez de uma ferramenta dedicada de carga, e não inclui aquecimento nem perfis de ramp-up.
+- **Que informação adicional seria útil?** A carga esperada em produção e a quantidade de réplicas, além de outros endpoints que poderiam ser usados caso algum apresentasse alguma falha.

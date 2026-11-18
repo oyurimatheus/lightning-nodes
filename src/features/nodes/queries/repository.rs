@@ -6,8 +6,6 @@ use crate::features::nodes::domain::{
 };
 use crate::shared::error::AppError;
 
-/// A node of the active snapshot together with the snapshot's persisted
-/// publication timestamp (`saved_at`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveNode {
     pub node: LightningNode,
@@ -15,7 +13,6 @@ pub struct ActiveNode {
 }
 
 impl ActiveNode {
-    /// Serialize for the HTTP response using integer arithmetic only.
     pub fn capacity_btc(&self) -> String {
         capacity_to_btc_string(self.node.capacity_sats)
     }
@@ -29,9 +26,13 @@ impl ActiveNode {
     }
 }
 
-/// Read path for `GET /nodes`. Returns nodes of the latest successfully
-/// published snapshot; never touches the external provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePage {
+    pub nodes: Vec<ActiveNode>,
+    pub total_count: u64,
+}
+
 #[async_trait]
 pub trait NodeReader: Send + Sync {
-    async fn list_active_nodes(&self) -> Result<Vec<ActiveNode>, AppError>;
+    async fn list_active_nodes(&self, limit: i64, offset: i64) -> Result<NodePage, AppError>;
 }

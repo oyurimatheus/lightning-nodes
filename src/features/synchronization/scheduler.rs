@@ -11,8 +11,6 @@ use crate::shared::error::AppError;
 
 pub type SyncUseCase = SyncNodesUseCase<dyn NodeProvider, dyn SnapshotRepository>;
 
-/// One synchronization cycle: a single import (mutually excluded in-process,
-/// advisory-locked across instances) followed by best-effort history cleanup.
 pub struct SyncJob {
     sync: Arc<SyncUseCase>,
     cleanup: HistoryCleanup,
@@ -41,15 +39,12 @@ impl SyncJob {
             )
             .await
         {
-            // Cleanup is best-effort; it must never fail the import.
             tracing::warn!(error_category = error.category(), "history cleanup failed");
         }
         Ok(outcome)
     }
 }
 
-/// Bounded exponential backoff with jitter for provider-side errors.
-/// Infrastructure errors (e.g. database down) abort the cycle early.
 pub async fn run_with_backoff(
     job: &SyncJob,
     max_attempts: u32,
@@ -86,8 +81,6 @@ pub async fn run_with_backoff(
     }
 }
 
-/// Sequential scheduler: one cycle at startup (when enabled), then a fixed
-/// interval. Missed ticks are skipped rather than queued to avoid backlog.
 pub struct Scheduler {
     job: Arc<SyncJob>,
     status: Arc<SyncStatusHandle>,
@@ -110,8 +103,6 @@ impl Scheduler {
         }
     }
 
-    /// Spawn the background loop; returns immediately so the HTTP server is
-    /// available before the first import completes.
     pub fn spawn(self: Arc<Self>) {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(self.interval);

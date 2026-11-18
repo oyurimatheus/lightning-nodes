@@ -1,5 +1,5 @@
 # --- Build stage: compile the release binary with the pinned toolchain ---
-FROM rust:1.94-slim AS builder
+FROM docker.io/library/rust:1.94-slim AS builder
 WORKDIR /build
 
 # Cache dependencies separately from sources for faster rebuilds.
@@ -11,7 +11,7 @@ COPY migrations ./migrations
 RUN touch src/main.rs && cargo build --release
 
 # --- Runtime stage: minimal image, non-root user, CA certificates ---
-FROM debian:12-slim AS runtime
+FROM docker.io/library/debian:12-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \

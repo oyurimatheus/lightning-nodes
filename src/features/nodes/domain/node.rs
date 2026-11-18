@@ -2,16 +2,13 @@ use chrono::{DateTime, Utc};
 
 use crate::shared::error::AppError;
 
-/// Satoshis per bitcoin, kept as an integer constant: all monetary math is
-/// integer-only, never floating point.
 pub const SATS_PER_BTC: i64 = 100_000_000;
 
-/// A validated Lightning node belonging to one snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LightningNode {
     pub public_key: String,
     pub alias: String,
-    /// Always non-negative; validated against the source's unsigned range.
+
     pub capacity_sats: i64,
     pub first_seen: DateTime<Utc>,
 }
@@ -43,8 +40,6 @@ impl LightningNode {
     }
 }
 
-/// Convert satoshis to BTC using integer arithmetic, rendered with exactly
-/// eight fractional digits (e.g. 36_010_516_297 -> "360.10516297").
 pub fn capacity_to_btc_string(sats: i64) -> String {
     debug_assert!(sats >= 0, "capacity is validated non-negative");
     let whole = sats / SATS_PER_BTC;
@@ -52,8 +47,6 @@ pub fn capacity_to_btc_string(sats: i64) -> String {
     format!("{whole}.{fraction:08}")
 }
 
-/// Convert Unix seconds to an RFC 3339 UTC string with second precision and
-/// `Z` suffix (e.g. 1522941222 -> "2018-04-05T15:13:42Z").
 pub fn unix_seconds_to_rfc3339(seconds: i64) -> Result<String, AppError> {
     Ok(from_unix_seconds(seconds)
         .map_err(|e| AppError::InvalidTimestamp(e.to_string()))?
@@ -61,8 +54,6 @@ pub fn unix_seconds_to_rfc3339(seconds: i64) -> Result<String, AppError> {
         .to_string())
 }
 
-/// Convert Unix seconds to UTC. Zero and pre-epoch (negative) values are
-/// valid; only values outside the representable calendar range fail.
 pub fn from_unix_seconds(seconds: i64) -> Result<DateTime<Utc>, AppError> {
     DateTime::from_timestamp(seconds, 0).ok_or_else(|| {
         AppError::InvalidTimestamp(format!("unix timestamp {seconds} is out of range"))
@@ -133,7 +124,6 @@ mod tests {
 
     #[test]
     fn timestamp_second_precision() {
-        // Fractional data is dropped; output always has second precision.
         assert_eq!(
             unix_seconds_to_rfc3339(1522941222).unwrap(),
             unix_seconds_to_rfc3339(1522941222).unwrap()

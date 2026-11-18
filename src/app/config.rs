@@ -3,12 +3,6 @@ use std::time::Duration;
 
 use crate::shared::error::AppError;
 
-/// Complete application configuration.
-///
-/// Precedence: environment variables > `config/default.toml` > built-in
-/// defaults. `DATABASE_URL` is environment-only (never stored in the repo).
-/// Duration values use humantime syntax (`"5s"`, `"10m"`, `"1h 30s"`), both
-/// in TOML and environment variables.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -27,8 +21,6 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
-    /// From the environment only (`DATABASE_URL`). `None` in tests that
-    /// inject their own URL directly.
     pub url: Option<String>,
     pub read_pool_max_connections: u32,
     pub write_pool_max_connections: u32,
@@ -57,16 +49,12 @@ pub struct HistoryConfig {
 
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
-    /// `true` (default) extends `GET /nodes` with `saved_at`.
-    /// `false` restores the original four-field challenge contract.
     pub include_saved_at: bool,
 }
 
-/// Maximum bind parameters per statement in PostgreSQL is 65535; node inserts
-/// use 5 columns per row.
 pub const MAX_INSERT_PARAMS: usize = 65_535;
 pub const NODE_INSERT_COLUMNS: usize = 5;
-/// Highest usable insert batch size under the parameter limit.
+
 pub const MAX_BATCH_SIZE: usize = MAX_INSERT_PARAMS / NODE_INSERT_COLUMNS;
 
 impl Default for AppConfig {
@@ -103,7 +91,6 @@ impl Default for AppConfig {
     }
 }
 
-// Raw TOML shapes; every field optional so partial files merge over defaults.
 #[derive(Deserialize, Default)]
 struct TomlConfig {
     server: Option<TomlServer>,
@@ -150,17 +137,12 @@ struct TomlApi {
 }
 
 impl AppConfig {
-    /// Load configuration for a production run: `.env`, then
-    /// `config/default.toml`, then environment overrides.
     pub fn load() -> Result<Self, AppError> {
         dotenvy::dotenv().ok();
         let file = std::fs::read_to_string("config/default.toml").unwrap_or_default();
         Self::build(Some(&file), |key| std::env::var(key).ok())
     }
 
-    /// Build configuration from a TOML file and an env lookup. The lookup is
-    /// injectable so tests can exercise precedence without touching real
-    /// process environment.
     pub fn build(
         file: Option<&str>,
         env: impl Fn(&str) -> Option<String>,
@@ -226,8 +208,6 @@ impl AppConfig {
             }
         }
 
-        // Environment overrides win over the TOML file. Durations use
-        // humantime syntax ("600s", "10m").
         if let Some(v) = env("DATABASE_URL") {
             config.database.url = Some(v);
         }
@@ -272,7 +252,6 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Reject invalid values early with actionable messages.
     pub fn validate(&self) -> Result<(), AppError> {
         let s = &self.synchronization;
         if s.interval.is_zero() {
@@ -334,7 +313,6 @@ fn parse_env<T: std::str::FromStr>(
     }
 }
 
-/// Parse an environment duration using humantime syntax ("5s", "10m").
 fn parse_duration(
     env: &impl Fn(&str) -> Option<String>,
     key: &str,
@@ -408,7 +386,7 @@ mod tests {
         assert_eq!(config.synchronization.batch_size, 250);
         assert_eq!(config.database.acquire_timeout, Duration::from_secs(3));
         assert_eq!(config.mempool.timeout, Duration::from_secs(20));
-        // Untouched keys keep their defaults.
+
         assert!(config.api.include_saved_at);
         assert_eq!(config.history.retention_days, 30);
     }

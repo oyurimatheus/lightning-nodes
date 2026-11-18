@@ -17,7 +17,7 @@ use crate::features::synchronization::scheduler::{Scheduler, SyncJob};
 use crate::features::synchronization::status::SyncStatusHandle;
 use crate::shared::database::{self, DatabasePools};
 use crate::shared::error::AppError;
-/// Everything wired together, reused by `main` and integration tests.
+
 pub struct AppComponents {
     pub router: Router,
     pub config: AppConfig,
@@ -28,8 +28,6 @@ pub struct AppComponents {
     pub provider_url: String,
 }
 
-/// Connect to the database, apply migrations, and wire all features.
-/// `database_url` overrides `DATABASE_URL` (used by integration tests).
 pub async fn build_components(
     config: AppConfig,
     database_url: Option<&str>,
@@ -43,9 +41,6 @@ pub async fn build_components(
             )
         })?;
 
-    // Startup migration phase. sqlx tracks applied migrations in
-    // `_sqlx_migrations` and takes a PostgreSQL advisory lock, so concurrent
-    // starters cannot race; startup blocks until the schema is ready.
     let pools = database::build(&config, &url).await?;
     sqlx::migrate!("./migrations")
         .run(&pools.write)
@@ -84,7 +79,7 @@ pub async fn build_components(
         pool: pools.read.clone(),
         include_saved_at: config.api.include_saved_at,
     };
-    let _ = ListNodes::new(reader_usecase_reader.clone()); // explicit read use case for future reuse
+    let _ = ListNodes::new(reader_usecase_reader.clone());
     let app_router = router::build(state);
 
     Ok(AppComponents {
@@ -98,7 +93,6 @@ pub async fn build_components(
     })
 }
 
-/// Spawn the background synchronization scheduler.
 pub fn spawn_scheduler(components: &AppComponents) {
     let scheduler = Scheduler::new(
         components.sync_job.clone(),
@@ -109,7 +103,6 @@ pub fn spawn_scheduler(components: &AppComponents) {
     Arc::new(scheduler).spawn();
 }
 
-/// Production entry point: wire everything, spawn the scheduler, serve.
 pub async fn run() -> Result<(), AppError> {
     crate::shared::telemetry::init();
     let config = AppConfig::load()?;
@@ -151,7 +144,6 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
-/// Convenience used by integration tests to expose the active snapshot id.
 pub async fn active_snapshot_id(components: &AppComponents) -> Result<Option<Uuid>, AppError> {
     components.repository.active_snapshot_id().await
 }

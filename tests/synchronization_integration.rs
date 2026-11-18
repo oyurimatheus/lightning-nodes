@@ -1,6 +1,3 @@
-//! Synchronization lifecycle scenarios: replacement, history, atomic
-//! publication and historical cleanup.
-
 mod common;
 
 use axum::http::StatusCode;
@@ -9,7 +6,6 @@ use nodes_svc::features::nodes::commands::repository::SnapshotRepository;
 use std::collections::HashSet;
 use tower::util::ServiceExt;
 
-/// Scenario 6 — Snapshot replacement: A (10 nodes) replaced by B (15 nodes).
 #[tokio::test]
 async fn scenario_6_snapshot_replacement() {
     let env = start_stack(&provider_json(10), 200, true).await;
@@ -17,7 +13,7 @@ async fn scenario_6_snapshot_replacement() {
     let (_, body) = env.get_nodes().await;
     assert_eq!(body.as_array().unwrap().len(), 10);
 
-    // New payload of 15 nodes.
+    env.provider.reset().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path(common::RANKINGS_PATH))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(provider_json(15)))
@@ -36,13 +32,13 @@ async fn scenario_6_snapshot_replacement() {
     );
 }
 
-/// Scenario 7 — Historical snapshots: A still exists after B becomes active.
 #[tokio::test]
 async fn scenario_7_history_is_retained() {
     let env = start_stack(&provider_json(10), 200, true).await;
     env.run_sync().await.expect("snapshot A");
     let snapshot_a = env.active_snapshot_id().await.expect("A");
 
+    env.provider.reset().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path(common::RANKINGS_PATH))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(provider_json(15)))
@@ -52,7 +48,6 @@ async fn scenario_7_history_is_retained() {
     let snapshot_b = env.active_snapshot_id().await.expect("B");
     assert_ne!(snapshot_a, snapshot_b);
 
-    // Both ready snapshots exist in history.
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM node_snapshots WHERE status = 'ready'")
             .fetch_one(&env.components.pools.read)
@@ -60,7 +55,6 @@ async fn scenario_7_history_is_retained() {
             .expect("count ready snapshots");
     assert_eq!(count, 2);
 
-    // Snapshot A's nodes are still there.
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM lightning_nodes WHERE snapshot_id = $1")
             .bind(snapshot_a)
@@ -70,19 +64,18 @@ async fn scenario_7_history_is_retained() {
     assert_eq!(count, 10);
 }
 
-/// Scenario 8 — Atomic publication: reads during an import observe exactly
-/// one coherent snapshot, never a mixture of two versions.
 #[tokio::test]
 async fn scenario_8_publication_is_atomic_for_readers() {
     let env = start_stack(&provider_json(10), 200, true).await;
     env.run_sync().await.expect("snapshot A");
 
+    env.provider.reset().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path(common::RANKINGS_PATH))
         .respond_with(
             wiremock::ResponseTemplate::new(200)
                 .set_body_string(provider_json(15))
-                .set_delay(std::time::Duration::from_millis(20)),
+                .set_delay(std::time::Duration::from_millis(100)),
         )
         .mount(&env.provider)
         .await;
@@ -116,6 +109,7 @@ async fn scenario_8_publication_is_atomic_for_readers() {
                 );
             }
             seen.insert((saved_at, nodes.len()));
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
         seen
     });
@@ -123,7 +117,7 @@ async fn scenario_8_publication_is_atomic_for_readers() {
     let (_, reader_result) =
         tokio::join!(async { env.run_sync().await.expect("snapshot B") }, reader);
     let seen = reader_result.expect("reader task finishes");
-    // Every observed (saved_at, count) pair corresponds to one whole snapshot.
+
     assert!(
         seen.iter().all(|(_, count)| *count == 10 || *count == 15),
         "only complete snapshots were served: {seen:?}"
@@ -135,19 +129,17 @@ async fn scenario_8_publication_is_atomic_for_readers() {
     );
 }
 
-/// Scenario 11 — Historical cleanup: expired snapshots removed; active and
-/// the configured minimum history preserved.
 #[tokio::test]
 async fn scenario_11_cleanup_respects_active_and_minimum() {
     let env = start_stack(&provider_json(10), 200, true).await;
-    env.run_sync().await.expect("snapshot A"); // active
+    env.run_sync().await.expect("snapshot A");
 
-    for _ in 0..5 {
+    for count in 11..16 {
+        env.provider.reset().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path(common::RANKINGS_PATH))
             .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_body_string(provider_json(11 + rand_tick())),
+                wiremock::ResponseTemplate::new(200).set_body_string(provider_json(count)),
             )
             .mount(&env.provider)
             .await;
@@ -155,7 +147,6 @@ async fn scenario_11_cleanup_respects_active_and_minimum() {
     }
     let active = env.active_snapshot_id().await.expect("active");
 
-    // Force age beyond retention: pretend every snapshot was created long ago.
     env.sql("UPDATE node_snapshots SET created_at = now() - interval '400 days'")
         .await;
 
@@ -168,10 +159,8 @@ async fn scenario_11_cleanup_respects_active_and_minimum() {
 
     assert!(removed > 0, "expired snapshots were removed");
 
-    // Active snapshot untouched.
     assert_eq!(env.active_snapshot_id().await, Some(active));
 
-    // At least `minimum_successful` ready snapshots remain (active counts).
     let ready: i64 =
         sqlx::query_scalar("SELECT count(*) FROM node_snapshots WHERE status = 'ready'")
             .fetch_one(&env.components.pools.read)
@@ -179,25 +168,26 @@ async fn scenario_11_cleanup_respects_active_and_minimum() {
             .expect("count ready");
     assert_eq!(ready, 3, "minimum history preserved, remainder removed");
 
-    // `GET /nodes` still serves the active snapshot.
     let (status, body) = env.get_nodes().await;
     assert_eq!(status, StatusCode::OK);
     assert!(!body.as_array().unwrap().is_empty());
 }
 
-/// Cheap per-run payload variation without extra dependencies.
-fn rand_tick() -> usize {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.subsec_nanos() as usize) % 4)
-        .unwrap_or(1)
-}
-
-/// Cleanup must never delete the active snapshot even when it is old.
 #[tokio::test]
 async fn cleanup_never_removes_active_snapshot() {
     let env = start_stack(&provider_json(2), 200, true).await;
     env.run_sync().await.expect("snapshot A");
+    for count in 3..=5 {
+        env.provider.reset().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(common::RANKINGS_PATH))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(provider_json(count)),
+            )
+            .mount(&env.provider)
+            .await;
+        env.run_sync().await.expect("history snapshot");
+    }
     let active = env.active_snapshot_id().await.expect("active");
 
     env.sql("UPDATE node_snapshots SET created_at = now() - interval '400 days'")
@@ -211,9 +201,11 @@ async fn cleanup_never_removes_active_snapshot() {
     assert!(removed > 0);
     assert_eq!(env.active_snapshot_id().await, Some(active));
 
-    let nodes: i64 = sqlx::query_scalar("SELECT count(*) FROM lightning_nodes")
-        .fetch_one(&env.components.pools.read)
-        .await
-        .expect("count nodes");
-    assert_eq!(nodes, 2, "active snapshot nodes survive cleanup");
+    let nodes: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM lightning_nodes WHERE snapshot_id = $1")
+            .bind(active)
+            .fetch_one(&env.components.pools.read)
+            .await
+            .expect("count active snapshot nodes");
+    assert_eq!(nodes, 5, "active snapshot nodes survive cleanup");
 }

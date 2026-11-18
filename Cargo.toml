@@ -24,7 +24,7 @@ humantime = "2"
 humantime-serde = "1"
 
 [dev-dependencies]
-testcontainers-modules = { version = "0.13", features = ["postgres"] }
+
 tower = { version = "0.5.3", features = ["util"] }
 wiremock = "0.6.5"
 

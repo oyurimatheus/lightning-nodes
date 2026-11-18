@@ -9,15 +9,8 @@ use crate::features::nodes::commands::repository::SnapshotRepository;
 use crate::features::nodes::domain::LightningNode;
 use crate::shared::error::AppError;
 
-/// Advisory lock key that serializes publication across application instances.
 const PUBLICATION_LOCK_KEY: i64 = 627_512_827_001;
 
-/// PostgreSQL write adapter implementing the snapshot lifecycle.
-///
-/// Historical snapshots are immutable: nodes are inserted append-only into a
-/// fresh snapshot and publication is a short transaction that flips a single
-/// pointer row. Readers therefore never block on imports and never observe a
-/// mixture of two snapshots.
 pub struct PostgresSnapshotRepository {
     pool: PgPool,
     batch_size: usize,
@@ -29,7 +22,6 @@ impl PostgresSnapshotRepository {
     }
 
     fn effective_batch_size(&self) -> usize {
-        // 5 bound parameters per row; stay under the 65535 parameter limit.
         self.batch_size.clamp(1, MAX_INSERT_PARAMS / 5)
     }
 }
@@ -111,7 +103,6 @@ impl SnapshotRepository for PostgresSnapshotRepository {
                 Ok(saved_at)
             }
             Err(error) => {
-                // Roll back on drop; nothing but this transaction's work is lost.
                 let _ = tx.rollback().await;
                 tracing::error!(
                     snapshot_id = %snapshot_id,
@@ -151,9 +142,6 @@ impl SnapshotRepository for PostgresSnapshotRepository {
         retention_days: u32,
         minimum_successful: u32,
     ) -> Result<u64, AppError> {
-        // Delete expired non-active snapshots (nodes cascade). The `recent`
-        // CTE exempts the newest `minimum_successful - 1` ready snapshots
-        // besides the active one, so history never drops below the minimum.
         let rows = sqlx::query(
             r#"
             WITH active AS (
@@ -164,8 +152,8 @@ impl SnapshotRepository for PostgresSnapshotRepository {
                 FROM node_snapshots
                 WHERE status = 'ready'
                   AND id <> (SELECT id FROM active)
-                ORDER BY created_at DESC
-                OFFSET GREATEST($2::int - 1, 0)
+                ORDER BY created_at DESC, id DESC
+                LIMIT GREATEST($2::int - 1, 0)
             ),
             expired AS (
                 SELECT s.id
@@ -199,13 +187,11 @@ impl SnapshotRepository for PostgresSnapshotRepository {
     }
 }
 
-/// Publication core, shared by the adapter and integration tests.
 pub async fn publish_in_transaction(
     tx: &mut Transaction<'static, Postgres>,
     snapshot_id: Uuid,
     expected_node_count: usize,
 ) -> Result<DateTime<Utc>, AppError> {
-    // Serialize publication across instances and keep it short.
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(PUBLICATION_LOCK_KEY)
         .execute(&mut **tx)
@@ -260,7 +246,6 @@ pub async fn publish_in_transaction(
         )));
     }
 
-    // `saved_at` is assigned by PostgreSQL inside the publication transaction.
     let saved_at: Option<DateTime<Utc>> = sqlx::query_scalar(
         r#"
         UPDATE node_snapshots

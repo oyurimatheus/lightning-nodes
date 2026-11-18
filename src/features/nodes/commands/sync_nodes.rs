@@ -9,7 +9,6 @@ use crate::features::nodes::infrastructure::mempool_client::{NodeProvider, Provi
 use crate::features::synchronization::status::{LastSuccess, SyncStatusHandle};
 use crate::shared::error::AppError;
 
-/// Successful import result.
 #[derive(Debug, Clone)]
 pub struct SyncOutcome {
     pub snapshot_id: Uuid,
@@ -18,9 +17,6 @@ pub struct SyncOutcome {
     pub duration_ms: u128,
 }
 
-/// Use case: fetch from the provider, validate the complete payload, persist
-/// a new immutable snapshot, and publish it atomically. Any failure keeps the
-/// previously active snapshot serving and records the error.
 pub struct SyncNodesUseCase<P: NodeProvider + ?Sized, R: SnapshotRepository + ?Sized> {
     provider: Arc<P>,
     repository: Arc<R>,
@@ -89,16 +85,13 @@ impl<P: NodeProvider + ?Sized, R: SnapshotRepository + ?Sized> SyncNodesUseCase<
 
     async fn run(&self, sync_id: Uuid) -> Result<SyncOutcome, AppError> {
         let started = Instant::now();
-        // 1. Fetch from the provider.
+
         let provider_nodes = self.provider.fetch_nodes().await?;
         self.status
             .record_payload_size(provider_nodes.len() as u64)
             .await;
         tracing::debug!(sync_id = %sync_id, nodes_received = provider_nodes.len(), "provider payload received");
 
-        // 2. Validate the complete payload before touching the active snapshot.
-        //    An unexpected empty response is a failure by default so a provider
-        //    incident cannot wipe valid data.
         if provider_nodes.is_empty() && self.reject_empty_response {
             return Err(AppError::InvalidProviderPayload(
                 "provider returned an empty response; refusing to import".to_owned(),
@@ -107,7 +100,6 @@ impl<P: NodeProvider + ?Sized, R: SnapshotRepository + ?Sized> SyncNodesUseCase<
         let nodes = self.convert(&provider_nodes)?;
         validate_unique_public_keys(&nodes)?;
 
-        // 3. Create the new immutable snapshot and persist node rows in batches.
         let snapshot_id = self.repository.create_loading_snapshot().await?;
         let write_result = self.repository.write_nodes(snapshot_id, &nodes).await;
         let outcome = match write_result {
@@ -123,10 +115,6 @@ impl<P: NodeProvider + ?Sized, R: SnapshotRepository + ?Sized> SyncNodesUseCase<
                 duration_ms: started.elapsed().as_millis(),
             }),
             Err(error) => {
-                // Never publish a partial snapshot; record the failure and keep
-                // the previously active snapshot intact. If even marking the
-                // snapshot as failed fails (e.g. database down), log it: the
-                // `loading` snapshot is harmless and can be reaped later.
                 if let Err(mark_error) = self
                     .repository
                     .mark_failed(snapshot_id, &error.to_string())
@@ -327,7 +315,7 @@ mod tests {
         )
         .await;
         assert!(uc.execute().await.is_err());
-        // No snapshot was even created.
+
         assert!(repo.calls.lock().unwrap().is_empty());
         let snapshot = status.snapshot().await;
         assert_eq!(snapshot.state, SyncState::Idle);
